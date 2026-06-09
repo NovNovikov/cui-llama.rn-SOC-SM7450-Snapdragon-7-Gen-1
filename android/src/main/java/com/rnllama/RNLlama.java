@@ -205,6 +205,16 @@ public class RNLlama {
           }
         }
 
+        // Some devices expose a Qualcomm board codename that looks Hexagon-capable
+        // even though their SoC does not match the supported Hexagon matrix. Keep a
+        // standalone OpenCL path available before falling back to CPU.
+        if (!jniLoaded && hasDotProd && hasI8mm && hasAdreno) {
+          if (tryLoadLibrary("rnllama_jni_v8_2_dotprod_i8mm_opencl")) {
+            jniLoaded = true;
+            loadedLib = "rnllama_jni_v8_2_dotprod_i8mm_opencl";
+          }
+        }
+
         if (!jniLoaded && hasDotProd && hasI8mm) {
           if (tryLoadLibrary("rnllama_jni_v8_2_dotprod_i8mm")) {
             jniLoaded = true;
@@ -374,6 +384,9 @@ public class RNLlama {
              SNAPDRAGON_8_SERIES_NAME_PATTERN.matcher(socModel).find())) {
           return true;
         }
+        // Avoid falling back to board codenames like "taro" when Android already
+        // reports a concrete SoC model that is outside the known Hexagon support set.
+        return false;
       }
     }
 

@@ -113,6 +113,18 @@ export type NativeContextParams = {
   kv_unified?: boolean
 
   /**
+   * Disable KV cache offloading to the selected accelerator backend.
+   * Default: false
+   */
+  no_kv_offload?: boolean
+
+  /**
+   * Disable general operation offloading to the selected accelerator backend.
+   * Default: false
+   */
+  no_op_offload?: boolean
+
+  /**
    * Use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
    */
   swa_full?: boolean

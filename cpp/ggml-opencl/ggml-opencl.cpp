@@ -181,13 +181,27 @@ static lm_ggml_cl_version get_opencl_c_version(lm_ggml_cl_version platform_versi
 
 #if CL_TARGET_OPENCL_VERSION >= 300
     if (platform_version.major >= 3) {
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, 0, nullptr, &param_size));
+        cl_int err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, 0, nullptr, &param_size);
+        if (err != CL_SUCCESS) {
+            LM_GGML_LOG_WARN(
+                "lm_ggml_opencl: CL_DEVICE_OPENCL_C_ALL_VERSIONS query failed with %d, "
+                "falling back to CL_DEVICE_OPENCL_C_VERSION\n",
+                err);
+            param_size = 0;
+        }
         if (!param_size) {
-            return {};
+            goto fallback_opencl_c_version;
         }
 
         std::unique_ptr<cl_name_version[]> versions(new cl_name_version[param_size]);
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, param_size, versions.get(), nullptr));
+        err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, param_size, versions.get(), nullptr);
+        if (err != CL_SUCCESS) {
+            LM_GGML_LOG_WARN(
+                "lm_ggml_opencl: CL_DEVICE_OPENCL_C_ALL_VERSIONS payload query failed with %d, "
+                "falling back to CL_DEVICE_OPENCL_C_VERSION\n",
+                err);
+            goto fallback_opencl_c_version;
+        }
         unsigned versions_count = param_size / sizeof(cl_name_version);
 
         cl_version version_max = 0;
@@ -201,13 +215,27 @@ static lm_ggml_cl_version get_opencl_c_version(lm_ggml_cl_version platform_versi
     LM_GGML_UNUSED(platform_version);
 #endif  // CL_TARGET_OPENCL_VERSION >= 300
 
-    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, 0, nullptr, &param_size));
+fallback_opencl_c_version:
+    {
+    cl_int err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, 0, nullptr, &param_size);
+    if (err != CL_SUCCESS) {
+        LM_GGML_LOG_WARN(
+            "lm_ggml_opencl: CL_DEVICE_OPENCL_C_VERSION size query failed with %d\n",
+            err);
+        return {};
+    }
     if (!param_size) {
         return {};
     }
 
     std::unique_ptr<char[]> param_storage(new char[param_size]);
-    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, param_size, param_storage.get(), nullptr));
+    err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, param_size, param_storage.get(), nullptr);
+    if (err != CL_SUCCESS) {
+        LM_GGML_LOG_WARN(
+            "lm_ggml_opencl: CL_DEVICE_OPENCL_C_VERSION payload query failed with %d\n",
+            err);
+        return {};
+    }
     auto param_value = std::string_view(param_storage.get(), param_size);
 
     const std::string version_prefix = "OpenCL C ";  // Suffix: "XX.YY <platform-specific-info>"
@@ -217,6 +245,7 @@ static lm_ggml_cl_version get_opencl_c_version(lm_ggml_cl_version platform_versi
     param_value.remove_prefix(version_prefix.length());
 
     return parse_cl_version(param_value);
+    }
 }
 
 static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
@@ -3106,8 +3135,19 @@ static lm_ggml_backend_opencl_context * lm_ggml_cl2_init(lm_ggml_backend_dev_t d
     LM_GGML_LOG_INFO("lm_ggml_opencl: device max workgroup size: %lu\n", backend_ctx->max_workgroup_size);
 
     // Check SVM.
-    cl_device_svm_capabilities svm_caps;
-    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_SVM_CAPABILITIES, sizeof(cl_device_svm_capabilities), &svm_caps, 0));
+    cl_device_svm_capabilities svm_caps = 0;
+    cl_int svm_err = clGetDeviceInfo(
+        device,
+        CL_DEVICE_SVM_CAPABILITIES,
+        sizeof(cl_device_svm_capabilities),
+        &svm_caps,
+        0);
+    if (svm_err != CL_SUCCESS) {
+        LM_GGML_LOG_WARN(
+            "lm_ggml_opencl: CL_DEVICE_SVM_CAPABILITIES query failed with %d, assuming no SVM support\n",
+            svm_err);
+        svm_caps = 0;
+    }
     LM_GGML_LOG_INFO("lm_ggml_opencl: SVM coarse grain buffer support: %s\n",
         svm_caps & CL_DEVICE_SVM_COARSE_GRAIN_BUFFER ? "true" : "false");
     LM_GGML_LOG_INFO("lm_ggml_opencl: SVM fine grain buffer support: %s\n",
@@ -3122,8 +3162,19 @@ static lm_ggml_backend_opencl_context * lm_ggml_cl2_init(lm_ggml_backend_dev_t d
         // If compiling against 3.0, then we can query.
         backend_ctx->non_uniform_workgroups = false;
 #if CL_TARGET_OPENCL_VERSION >= 300
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT, sizeof(cl_bool),
-                                 &backend_ctx->non_uniform_workgroups, 0));
+        cl_int nuwg_err = clGetDeviceInfo(
+            device,
+            CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT,
+            sizeof(cl_bool),
+            &backend_ctx->non_uniform_workgroups,
+            0);
+        if (nuwg_err != CL_SUCCESS) {
+            LM_GGML_LOG_WARN(
+                "lm_ggml_opencl: CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT query failed with %d, "
+                "assuming false\n",
+                nuwg_err);
+            backend_ctx->non_uniform_workgroups = false;
+        }
 #endif
     } else {
         LM_GGML_ASSERT(opencl_c_version.major == 2);
